@@ -1,8 +1,534 @@
-########data_qc#####
+########diff#####
 setwd('./')
 
 
+library(limma)
+library(pheatmap)
 
+inputFile="merge.txt"       
+logFCfilter=0.5              
+adj.P.Val.Filter=0.05      
+   
+
+rt=read.table(inputFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+# exp <- log2(exp-min(exp)+1)
+dimnames=list(rownames(exp),colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)),nrow=nrow(exp),dimnames=dimnames)
+data=avereps(data)
+data=data[rowMeans(data)>0,]
+#data <- log2(data-min(data)+1)
+
+
+sampleName1=c()
+files=dir()
+files=grep("s1.txt$", files, value=T)
+for(file in files){
+  rt=read.table(file, header=F, sep="\t", check.names=F)     
+  geneNames=as.vector(rt[,1])     
+  uniqGene=unique(geneNames)      
+  sampleName1=c(sampleName1, uniqGene)
+}
+
+
+sampleName2=c()
+files=dir()
+files=grep("s2.txt$", files, value=T)
+for(file in files){
+  rt=read.table(file, header=F, sep="\t", check.names=F)      
+  geneNames=as.vector(rt[,1])     
+  uniqGene=unique(geneNames)       
+  sampleName2=c(sampleName2, uniqGene)
+}
+
+
+conData=data[,sampleName1]
+treatData=data[,sampleName2]
+data=cbind(conData,treatData)
+conNum=ncol(conData)
+treatNum=ncol(treatData)
+
+
+Type=c(rep("Con",conNum),rep("AD",treatNum))
+design <- model.matrix(~0+factor(Type))
+colnames(design) <- c("AD","Con")
+fit <- lmFit(data,design)
+cont.matrix<-makeContrasts(AD-Con,levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+
+allDiff=topTable(fit2,adjust='fdr',number=200000)
+allDiffOut=rbind(id=colnames(allDiff),allDiff)
+write.table(allDiffOut, file="all.txt", sep="\t", quote=F, col.names=F)
+
+
+outData=rbind(id=paste0(colnames(data),"_",Type),data)
+write.table(outData, file="normalize.txt", sep="\t", quote=F, col.names=F)
+
+
+diffSig=allDiff[with(allDiff, (abs(logFC)>logFCfilter & adj.P.Val < adj.P.Val.Filter )), ]
+diffSigOut=rbind(id=colnames(diffSig),diffSig)
+write.table(diffSigOut, file="diff.txt", sep="\t", quote=F, col.names=F)
+
+
+diffGeneExp=data[row.names(diffSig),]
+diffGeneExpOut=rbind(id=paste0(colnames(diffGeneExp),"_",Type), diffGeneExp)
+write.table(diffGeneExpOut, file="diffGeneExp.txt", sep="\t", quote=F, col.names=F)
+
+
+geneNum=30
+diffSig=diffSig[order(as.numeric(as.vector(diffSig$logFC))),]
+diffGeneName=as.vector(rownames(diffSig))
+diffLength=length(diffGeneName)
+hmGene=c()
+if(diffLength>(2*geneNum)){
+  hmGene=diffGeneName[c(1:geneNum,(diffLength-geneNum+1):diffLength)]
+}else{
+  hmGene=diffGeneName
+}
+hmExp=data[hmGene,]
+Type=c(rep("Con",conNum),rep("AD",treatNum))
+names(Type)=colnames(data)
+Type=as.data.frame(Type)
+pdf(file="heatmap.pdf", width=10, height=10)
+pheatmap(hmExp, 
+         annotation=Type, 
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         cluster_cols =F,
+         show_colnames = F,
+         scale="row",
+         fontsize = 8,
+         fontsize_row=7,
+         fontsize_col=8)
+dev.off()
+
+
+devtools::install_github("Tong-Chen/ImageGP")
+library(ImageGP)
+library(ggplot2)
+library(ggpubr)
+library(egg)
+library(ggrepel)
+
+exprSet=read.table("normalize.txt", header=T, sep="\t", check.names=F,row.names = 1)
+
+#exprSet <- outData[,1:124]
+baseA <- exprSet[,1:124]
+baseMeanA <- as.data.frame(rowMeans(baseA))
+colnames(baseMeanA) <- "Control"
+head(baseMeanA)
+
+#Disease
+baseB <- exprSet[,125:281]
+baseMeanB <- as.data.frame(rowMeans(baseB))
+colnames(baseMeanB) <- "Disease"
+head(baseMeanB)
+
+
+identical(rownames(baseMeanA),rownames(baseMeanB))
+allDiff=allDiff[rownames(baseMeanA),]
+identical(rownames(allDiff),rownames(baseMeanB))
+diffexpr=cbind(baseMeanA,baseMeanB,allDiff)
+
+diffexpr$level <- ifelse(diffexpr$P.Value<0.05,
+                         ifelse(diffexpr$logFC>= 0.5, "Up",
+                                ifelse(diffexpr$logFC<=-0.5, "Down", 
+                                       "NoSig")),"NoSig")
+head(diffexpr)
+
+
+
+
+p <- sp_scatterplot(diffexpr, xvariable = "Control", yvariable = "Disease", 
+                    color_variable = "level",
+                    title ="Con vs AD", 
+                    color_variable_order = c("NoSig","Up", "Down"),
+                    manual_color_vector = c("grey","firebrick","dodgerblue")) + 
+  coord_fixed(1)+ labs(x = "Con", y = "AD")
+p
+
+
+
+diffexpr$label =""
+diffexpr$X <- rownames(diffexpr)
+diffexpr <- diffexpr[order(diffexpr$P.Value),]
+up.genes <- head(diffexpr$X[which(diffexpr$level=="Up")],20)
+down.genes <- head(diffexpr$X[which(diffexpr$level=="Down")],20)
+top10genes <- c(as.character(up.genes), as.character(down.genes))
+diffexpr$label[match(top10genes,diffexpr$X)] <- top10genes
+
+
+
+p +  geom_text_repel(data=diffexpr, aes(label= label), color="black", size=5, fontface="italic",
+                     arrow = arrow(ends="first", length = unit(0.01, "npc")), box.padding = 0.2,
+                     point.padding = 0.3, segment.color = 'black', segment.size = 0.3, force = 1, 
+                     max.iter = 3e3)+
+  theme(axis.text = element_text(size = 20),  
+        axis.title = element_text(size = 20),  
+        plot.title = element_text(size = 20),
+        legend.text = element_text(size = 20))  
+
+
+
+##############################################immu################################################################
+
+
+setwd("../immu")
+library(IOBR)
+expr_coad <- read.table("normalize.txt",sep = "\t",header = T,row.names = 1)
+
+expr_coad <- expr_coad[, grep("AD$", names(expr_coad))]
+
+tme_deconvolution_methods
+########## MCPcounter################
+im_mcpcounter <- deconvo_tme(eset = expr_coad,
+                             method = "mcpcounter"
+)
+im_mcpcounter <- as.data.frame(im_mcpcounter)
+rownames(im_mcpcounter) <- im_mcpcounter[,1]
+im_mcpcounter <- im_mcpcounter[,-1]
+head(im_mcpcounter)[,1:3]
+im_mcpcounter <- im_mcpcounter[colnames(expr_coad),]
+
+genelist <- c("ATP6V1E1","CCKBR","SV2B","UBE2N","TUBB2A","SYT1","DYNC1I1","NRN1")
+gene <- genelist
+immuscore <- function(gene){
+  y <- as.numeric(expr_coad[gene,])
+  colnames <- colnames(im_mcpcounter)
+  do.call(rbind,lapply(colnames, function(x){
+    dd  <- cor.test(as.numeric(im_mcpcounter[,x]),y,type="spearman")
+    data.frame(gene=gene,immune_cells=x,cor=dd$estimate,p.value=dd$p.value )
+  }))
+}
+immuscore("ATP6V1E1")
+data <- do.call(rbind,lapply(genelist,immuscore))
+head(data)
+
+write.csv(data, "correlation_mcp.csv", quote = F, row.names = F)
+data$pstar <- ifelse(data$p.value < 0.05,
+                     ifelse(data$p.value < 0.01,"**","*"),
+                     "")
+data$pstar[1:20]
+library(ggplot2)
+library(dplyr)
+library(ggplot2)
+library(dplyr)
+ggplot(data, aes(immune_cells, gene)) + 
+  geom_tile(aes(fill = cor), colour = "black",size=1)+
+  scale_fill_gradient2(low = "#2b8cbe",mid = "white",high = "#e41a1c")+
+  geom_text(aes(label=pstar),col ="black",size = 5)+
+  theme_minimal()+
+  theme(axis.title.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 8))+
+  
+  labs(fill =paste0(" * p < 0.05","\n\n","** p < 0.01","\n\n","Correlation"))
+
+ggsave("correlation_mcp.pdf", width = 7, height = 4)
+
+############EPIC##############
+im_epic <- deconvo_tme(eset = expr_coad,
+                       method = "epic",
+                       arrays = F
+)
+im_epic <- as.data.frame(im_epic)
+rownames(im_epic) <- im_epic[,1]
+im_epic <- im_epic[,-1]
+head(im_epic)[,1:3]
+im_epic <- im_epic[colnames(expr_coad),]
+
+genelist <- c("ATP6V1E1","CCKBR","SV2B","UBE2N","TUBB2A","SYT1","DYNC1I1","NRN1")
+gene <- genelist
+immuscore <- function(gene){
+  y <- as.numeric(expr_coad[gene,])
+  colnames <- colnames(im_epic)
+  do.call(rbind,lapply(colnames, function(x){
+    dd  <- cor.test(as.numeric(im_epic[,x]),y,type="spearman")
+    data.frame(gene=gene,immune_cells=x,cor=dd$estimate,p.value=dd$p.value )
+  }))
+}
+immuscore("ATP6V1E1")
+data <- do.call(rbind,lapply(genelist,immuscore))
+head(data)
+
+write.csv(data, "correlation_epic.csv", quote = F, row.names = F)
+data$pstar <- ifelse(data$p.value < 0.05,
+                     ifelse(data$p.value < 0.01,"**","*"),
+                     "")
+data$pstar[1:20]
+library(ggplot2)
+library(dplyr)
+library(ggplot2)
+library(dplyr)
+ggplot(data, aes(immune_cells, gene)) + 
+  geom_tile(aes(fill = cor), colour = "black",size=1)+
+  scale_fill_gradient2(low = "#2b8cbe",mid = "white",high = "#e41a1c")+
+  geom_text(aes(label=pstar),col ="black",size = 5)+
+  theme_minimal()+
+  theme(axis.title.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 8))+
+ 
+  labs(fill =paste0(" * p < 0.05","\n\n","** p < 0.01","\n\n","Correlation"))
+
+ggsave("correlation_epic.pdf", width = 6, height = 4)
+
+#############xCell############
+im_xcell <- deconvo_tme(eset = expr_coad,
+                        method = "xcell",
+                        arrays = F
+)
+im_xcell <- as.data.frame(im_xcell)
+rownames(im_xcell) <- im_xcell[,1]
+im_xcell <- im_xcell[,-1]
+head(im_xcell)[,1:3]
+im_xcell <- im_xcell[colnames(expr_coad),]
+
+genelist <- c("ATP6V1E1","CCKBR","SV2B","UBE2N","TUBB2A","SYT1","DYNC1I1","NRN1")
+gene <- genelist
+immuscore <- function(gene){
+  y <- as.numeric(expr_coad[gene,])
+  colnames <- colnames(im_xcell)
+  do.call(rbind,lapply(colnames, function(x){
+    dd  <- cor.test(as.numeric(im_xcell[,x]),y,type="spearman")
+    data.frame(gene=gene,immune_cells=x,cor=dd$estimate,p.value=dd$p.value )
+  }))
+}
+immuscore("VGF")
+data <- do.call(rbind,lapply(genelist,immuscore))
+head(data)
+
+write.csv(data, "correlation_xcell.csv", quote = F, row.names = F)
+data$pstar <- ifelse(data$p.value < 0.05,
+                     ifelse(data$p.value < 0.01,"**","*"),
+                     "")
+data$pstar[1:20]
+library(ggplot2)
+library(dplyr)
+library(ggplot2)
+library(dplyr)
+ggplot(data, aes(immune_cells, gene)) + 
+  geom_tile(aes(fill = cor), colour = "black",size=1)+
+  scale_fill_gradient2(low = "#2b8cbe",mid = "white",high = "#e41a1c")+
+  geom_text(aes(label=pstar),col ="black",size = 5)+
+  theme_minimal()+
+  theme(axis.title.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.text.y = element_text(size = 8))+
+
+  labs(fill =paste0(" * p < 0.05","\n\n","** p < 0.01","\n\n","Correlation"))
+
+ggsave("correlation_xcell.pdf", width = 15, height = 4)
+
+#############CIBERSORT#########
+im_cibersort <- deconvo_tme(eset = expr_coad,
+                            method = "cibersort",
+                            arrays = F,
+                            perm = 10
+)
+im_cibersort <- as.data.frame(im_cibersort)
+rownames(im_cibersort) <- im_cibersort[,1]
+im_cibersort <- im_cibersort[,-1]
+head(im_cibersort)[,1:3]
+im_cibersort <- im_cibersort[colnames(expr_coad),]
+
+genelist <- c("ATP6V1E1","CCKBR","SV2B","UBE2N","TUBB2A","SYT1","DYNC1I1","NRN1")
+gene <- genelist
+immuscore <- function(gene){
+  y <- as.numeric(expr_coad[gene,])
+  colnames <- colnames(im_cibersort)
+  do.call(rbind,lapply(colnames, function(x){
+    dd  <- cor.test(as.numeric(im_cibersort[,x]),y,type="spearman")
+    data.frame(gene=gene,immune_cells=x,cor=dd$estimate,p.value=dd$p.value )
+  }))
+}
+immuscore("VGF")
+data <- do.call(rbind,lapply(genelist,immuscore))
+head(data)
+
+write.csv(data, "correlation_CIBERSORT.csv", quote = F, row.names = F)
+data$pstar <- ifelse(data$p.value < 0.05,
+                     ifelse(data$p.value < 0.01,"**","*"),
+                     "")
+data$pstar[1:20]
+library(ggplot2)
+library(dplyr)
+library(ggplot2)
+library(dplyr)
+ggplot(data, aes(immune_cells, gene)) + 
+  geom_tile(aes(fill = cor), colour = "black",size=1)+
+  scale_fill_gradient2(low = "#2b8cbe",mid = "white",high = "#e41a1c")+
+  geom_text(aes(label=pstar),col ="black",size = 5)+
+  theme_minimal()+
+  theme(axis.title.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x = element_text(angle = 70, hjust = 1),
+        axis.text.y = element_text(size = 8))+
+ 
+  labs(fill =paste0(" * p < 0.05","\n\n","** p < 0.01","\n\n","Correlation"))
+
+ggsave("correlation_CIBERSORT.pdf", width = 8, height =5)
+
+#############cibersort_abs#########
+im_cibersort_abs <- deconvo_tme(eset = expr_coad,
+                                method = "cibersort_abs",
+                                arrays = F,
+                                perm = 10
+)
+im_cibersort_abs <- as.data.frame(im_cibersort_abs)
+rownames(im_cibersort_abs) <- im_cibersort_abs[,1]
+im_cibersort_abs <- im_cibersort_abs[,-1]
+head(im_cibersort_abs)[,1:3]
+colnames(im_cibersort_abs) <- paste0(colnames(im_cibersort_abs), "_abs")
+im_cibersort_abs <- im_cibersort_abs[colnames(expr_coad),]
+
+genelist <- c("ATP6V1E1","CCKBR","SV2B","UBE2N","TUBB2A","SYT1","DYNC1I1","NRN1")
+gene <- genelist
+immuscore <- function(gene){
+  y <- as.numeric(expr_coad[gene,])
+  colnames <- colnames(im_cibersort_abs)
+  do.call(rbind,lapply(colnames, function(x){
+    dd  <- cor.test(as.numeric(im_cibersort_abs[,x]),y,type="spearman")
+    data.frame(gene=gene,immune_cells=x,cor=dd$estimate,p.value=dd$p.value )
+  }))
+}
+immuscore("VGF")
+data <- do.call(rbind,lapply(genelist,immuscore))
+head(data)
+
+write.csv(data, "correlation_CIBERSORT_abs.csv", quote = F, row.names = F)
+data$pstar <- ifelse(data$p.value < 0.05,
+                     ifelse(data$p.value < 0.01,"**","*"),
+                     "")
+data$pstar[1:20]
+library(ggplot2)
+library(dplyr)
+library(ggplot2)
+library(dplyr)
+ggplot(data, aes(immune_cells, gene)) + 
+  geom_tile(aes(fill = cor), colour = "black",size=1)+
+  scale_fill_gradient2(low = "#2b8cbe",mid = "white",high = "#e41a1c")+
+  geom_text(aes(label=pstar),col ="black",size = 5)+
+  theme_minimal()+
+  theme(axis.title.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x = element_text(angle = 70, hjust = 1),
+        axis.text.y = element_text(size = 8))+
+ 
+  labs(fill =paste0(" * p < 0.05","\n\n","** p < 0.01","\n\n","Correlation"))
+
+ggsave("correlation_CIBERSORT_abs.pdf", width = 11, height =6)
+
+################quantiseq###########
+im_quantiseq <- deconvo_tme(eset = expr_coad,
+                            method = "quantiseq",
+                            scale_mrna = T
+)
+im_quantiseq <- as.data.frame(im_quantiseq)
+rownames(im_quantiseq) <- im_quantiseq[,1]
+im_quantiseq <- im_quantiseq[,-1]
+head(im_quantiseq)[,1:3]
+im_quantiseq <- im_quantiseq[colnames(expr_coad),]
+colnames(im_quantiseq)
+im_quantiseq <- im_quantiseq[, !(names(im_quantiseq) %in% c("T_cells_CD4_quantiseq"))]
+
+genelist <- c("ATP6V1E1","CCKBR","SV2B","UBE2N","TUBB2A","SYT1","DYNC1I1","NRN1")
+gene <- genelist
+immuscore <- function(gene){
+  y <- as.numeric(expr_coad[gene,])
+  colnames <- colnames(im_quantiseq)
+  do.call(rbind,lapply(colnames, function(x){
+    dd  <- cor.test(as.numeric(im_quantiseq[,x]),y,type="spearman")
+    data.frame(gene=gene,immune_cells=x,cor=dd$estimate,p.value=dd$p.value )
+  }))
+}
+immuscore("VGF")
+data <- do.call(rbind,lapply(genelist,immuscore))
+head(data)
+
+write.csv(data, "correlation_quantiseq.csv", quote = F, row.names = F)
+data$pstar <- ifelse(data$p.value < 0.05,
+                     ifelse(data$p.value < 0.01,"**","*"),
+                     "")
+data$pstar[1:20]
+library(ggplot2)
+library(dplyr)
+library(ggplot2)
+library(dplyr)
+ggplot(data, aes(immune_cells, gene)) + 
+  geom_tile(aes(fill = cor), colour = "black",size=1)+
+  scale_fill_gradient2(low = "#2b8cbe",mid = "white",high = "#e41a1c")+
+  geom_text(aes(label=pstar),col ="black",size = 5)+
+  theme_minimal()+
+  theme(axis.title.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 8))+
+
+  labs(fill =paste0(" * p < 0.05","\n\n","** p < 0.01","\n\n","Correlation"))
+
+ggsave("correlation_quantiseq.pdf", width = 6, height =4)
+
+############ESTIMATE############
+im_estimate <- deconvo_tme(eset = expr_coad,
+                           method = "estimate"
+)
+im_estimate <- as.data.frame(im_estimate)
+colnames(im_estimate)
+rownames(im_estimate) <- im_estimate[,1]
+im_estimate <- im_estimate[,-1]
+head(im_estimate)[,1:3]
+im_estimate <- im_estimate[colnames(expr_coad),]
+im_estimate <- im_estimate[,1:3]
+
+genelist <- c("ATP6V1E1","CCKBR","SV2B","UBE2N","TUBB2A","SYT1","DYNC1I1","NRN1")
+gene <- genelist
+immuscore <- function(gene){
+  y <- as.numeric(expr_coad[gene,])
+  colnames <- colnames(im_estimate)
+  do.call(rbind,lapply(colnames, function(x){
+    dd  <- cor.test(as.numeric(im_estimate[,x]),y,type="spearman")
+    data.frame(gene=gene,immune_cells=x,cor=dd$estimate,p.value=dd$p.value )
+  }))
+}
+immuscore("VGF")
+data <- do.call(rbind,lapply(genelist,immuscore))
+head(data)
+
+write.csv(data, "correlation_ESTIMATE.csv", quote = F, row.names = F)
+data$pstar <- ifelse(data$p.value < 0.05,
+                     ifelse(data$p.value < 0.01,"**","*"),
+                     "")
+data$pstar[1:20]
+library(ggplot2)
+library(dplyr)
+library(ggplot2)
+library(dplyr)
+ggplot(data, aes(immune_cells, gene)) + 
+  geom_tile(aes(fill = cor), colour = "black",size=1)+
+  scale_fill_gradient2(low = "#2b8cbe",mid = "white",high = "#e41a1c")+
+  geom_text(aes(label=pstar),col ="black",size = 5)+
+  theme_minimal()+
+  theme(axis.title.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(size = 8))+
+
+  labs(fill =paste0(" * p < 0.05","\n\n","** p < 0.01","\n\n","Correlation"))
+
+ggsave("correlation_ESTIMATE.pdf", width = 6, height =4)
 
 
 
