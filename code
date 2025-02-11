@@ -531,6 +531,287 @@ ggplot(data, aes(immune_cells, gene)) +
 ggsave("correlation_ESTIMATE.pdf", width = 6, height =4)
 
 
+######################################################single_cell###############################################
+suppressMessages({
+  library("plyr")
+  library("tidyverse")
+  library("ggrepel")
+  library("ggthemes")
+  library("grid")
+  library("Seurat")
+  library("scales")
+  library("UpSetR")
+  library("car")
+  library("lsr")
+})
+s <- qs::qread("/home/data/CFS/scanpy/integrated_CFS.qs")
+clusterCols <- c("#843C39", "#8C6D31", "#E6550D", "#3182BD", "#54990F", "#BD9E39", "#E7BA52", "#31A354", "#E41A1C", 
+                 "#6BAED6", "#9ECAE1", "#AD494A", "#E7CB94", "#74C476", "#A1D99B", "#C7E9C0", "#99600F", 
+                 "#E7298A", "#C3BC3F", "#D6616B", "#FF7F00", "#1B9E77", "#FDAE6B", "#B3823E", "#66A61E", 
+                 "#F1788D", "#C6DBEF", "#E6550D", "#E7969C")
+scRNA <- s
+fig1a <- DimPlot(scRNA, group.by='leiden', cols=clusterCols, pt.size=0, raster=F,label = T,label.size = 5) 
+fig1a
+fig1b <- DimPlot(scRNA, group.by='celltype', cols=clusterCols, pt.size=0, raster=F,label = F,label.size = 5) 
+fig1b
+
+fig1c <- DimPlot(scRNA, group.by='leiden',split.by = "Diagnosis2",cols=clusterCols, pt.size=0, raster=F,label = T,label.size = 5) 
+fig1c
+table(scRNA$celltype)
+
+fig1d <- DimPlot(scRNA, group.by='leiden',split.by = "Diagnosis2",cols=clusterCols, pt.size=0, raster=F,label = T,label.size = 5) 
+fig1d
+
+
+table(scRNA$Diagnosis2)
+clusterCols2 <- c("#1B9E77", "#E7969C", "#6BAED6")
+fig1d <- DimPlot(scRNA, group.by='Diagnosis2', pt.size=0, cols=clusterCols2,raster=F) 
+fig1d
+
+
+FeaturePlot(s,features = "INPP5D",split.by = "Diagnosis2")
+DotPlot(scRNA,features = "UBE2N",group.by =  "Diagnosis")
+VlnPlot(scRNA,features = "UBE2N",split.by = "Diagnosis",group.by = "celltype")
+
+
+# Normalize with standard processing (log transformation)
+DefaultAssay(object = s) <- "RNA"
+s <- NormalizeData(s, verbose = FALSE)
+
+# Subset for C and NC in CD4+ T Cells
+s_sub <- subset(s, celltype == "CD4+ T Cells")
+s_sub$Diagnosis <- factor(s_sub$Diagnosis, levels = c("HC", "CI"))
+table(s_sub$Diagnosis)
+# Generate violin plot.
+table(s$Diagnosis2)
+s$Diagnosis2 <- factor(s$Diagnosis2, levels = c("HC", "MCI","AD"))
+Idents(s) <- "celltype"
+output_dir <- "/home/data/t200305/danxibao/CFS/result/"
+p <- VlnPlot(s, features = "HsT19680", split.by = c("Diagnosis2"), pt.size = 0,
+             log = TRUE, cols = c("#E5007F", "#7CC8AB","#E7969C"))
+set_panel_size(p,
+               file = paste0(output_dir, "CD4+_T_Cells_UBE2N.pdf"),
+               width = unit(10, "in"), height = unit(4, "in"))
+
+p <- VlnPlot(s, features = "STUB1", split.by = c("Diagnosis2"), pt.size = 0,
+             cols = c("#E5007F", "#7CC8AB","#E7969C"), log = TRUE)
+ #+geom_boxplot(width=0.5, outlier.shape = NA)
+set_panel_size(p,
+               file = paste0(output_dir, "CD4+_T_Cells_STUB1.pdf"),
+               width = unit(10, "in"), height = unit(4, "in"))
+
+########################################UBE2N_diff###########################################
+
+##############figure10G
+setwd("~/figure10/figure10G")
+library(Seurat)
+library(magrittr)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(rstatix)
+set.seed(123)
+Idents(s) <- "celltype"
+#sc <- subset(s,downsample=100)
+table(s$Diagnosis2)
+sc <- s
+markers <- c("VAMP2")
+Idents(sc) <- "celltype"
+levels(sc)
+table(sc$Diagnosis2)
+sc$Group <- sc$Diagnosis
+#sc <- subset(s, Diagnosis2 %in% c("MCI", "HC"))
+sc$Group <- sc$Diagnosis2
+df <- FetchData(sc, vars = c(markers, "Group", "celltype")) %>%
+  reshape2::melt(id.vars = c("Group", "celltype"), 
+                 variable.name = "gene",
+                 value.name = "expression") %>%
+  mutate(batch = factor(Group, levels = c("HC", "MCI","AD")),
+         celltype = factor(celltype, levels = c("B Cells","CD4+ T Cells","CD4+/CD8+ T Cells","CD8+ T Cells",
+                                                "CD14+/CD68hi Monoctyes","CD14+/CD68lo Monoctyes","DC","NK Cells",
+                                                "Plasma Cells","T Regulatory Cells","Undetermined")))
+stat.test <- df %>% 
+  group_by(celltype, gene) %>% 
+  t_test(expression ~ Group) %>%
+  #adjust_pvalue(method = "bonferroni") %>% 
+  add_significance()
+stat.test
+stat.test <- stat.test %>% add_xy_position(x = "batch")
+v1 <- ggviolin(df, x = "batch", y = "expression", 
+               fill = "batch", 
+               color = "batch", 
+               facet = c("gene","celltype")) +
+  scale_fill_manual(values = c("#2874C5", "#EABF00","pink")) +
+  scale_color_manual(values = c("#2874C5", "#EABF00",'pink')) + 
+  xlab("") +
+  ylab("Expression level (log TPM)") +
+  theme(panel.grid = element_blank(),
+        strip.text.y = element_text(angle = 0),
+        strip.background.x = element_rect(fill = "grey95"), 
+        strip.background.y = element_blank()) 
+v1
+
+v1 + stat_pvalue_manual(stat.test, hide.ns = TRUE) 
+
+
+v1 + 
+  stat_pvalue_manual(stat.test, 
+                     bracket.nudge.y = 2, 
+                     hide.ns = TRUE,
+                     label = "{p}{p.signif}", 
+                     label.size = 3, 
+                     vjust = -0.5) + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) 
+
+
+x_value <- c(0.7, 1.3)
+for (i in 1:3) {
+  x_value <- append(x_value, x_value[((i-1)*2+1):(i*2)]+1)
+}
+
+###cd4T
+data <- df[df$celltype == "DC", ]
+data <- data[,c(1,4)]
+data$Group2 <- gsub("MCI", "AD", data$Group)
+table(data$Group2)
+data3 <- data[data$expression == 0, ]
+table(data3$Group2)
+colnames(data) <- c("Group","Values",'Group2')
+data <- data[data$Values != 0, ]
+table(data$Group2)
+
+data$Values <- as.numeric(data$Values)
+table(data$Group)
+data$Group <- factor(data$Group,levels = c("HC","MCI","AD"))
+
+x_value <- c(0.9, 1.1)
+for (i in 1:2) {
+  x_value <- append(x_value, x_value[((i-1)*2+1):(i*2)]+1)
+}
+
+med_values <- rep(c(median(data[which(data$Group == "HC"),]$Values),
+                    median(data[which(data$Group == "MCI"),]$Values),
+                    median(data[which(data$Group == "AD"),]$Values)),
+                  rep(2,3))
+
+tmp_data <- as.data.frame(cbind(x_value,med_values,
+                                rep(c("HC","MCI","AD"),
+                                    rep(2,3))))
+tmp_data$x_value <- as.numeric(tmp_data$x_value)
+tmp_data$med_values <- as.numeric(tmp_data$med_values)
+tmp_data$V3 <- factor(tmp_data$V3, levels = c("HC","MCI","AD"))
+
+table(data$Group)
+
+p1 <- ggplot(data,aes(Group,Values))+
+
+  geom_violin(aes(fill=Group),color="white")+
+
+  geom_boxplot(fill="#a6a7ac",color="#a6a7ac",
+               width = 0.15,outlier.shape = NA)+
+  geom_line(data=tmp_data,aes(x_value,med_values,group=V3,color=V3),size=1)+
+
+  scale_color_manual(values = c("#fbd3b9","#a1c9e5","#417bb9"))+
+  scale_fill_manual(values = c("#fbd3b9","#a1c9e5","#417bb9"))+
+
+  theme_bw()+
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none")+
+
+  xlab("Status")+
+  ylab("Gene expression")+
+
+  scale_y_continuous(breaks = seq(0,8,2))+
+
+  annotate("text", label = "VAMP2", parse = TRUE, 
+           x = 2, y = 9, size = 4, colour = "black")+
+  # annotate("text", label = "17284",
+  #          x = 1.3, y = 7, size = 4, colour = "black")+
+  # annotate("text", label = "3362",  
+  #          x = 2.3, y = 8, size = 4, colour = "black")+
+  # annotate("text", label = "2096",
+  #          x = 3.3, y = 7, size = 4, colour = "black")+
+
+  geom_signif(comparisons = list(c("HC", "MCI"),
+                                 c("MCI", "AD"),
+                                 c("HC", "AD")),
+              map_signif_level=T,
+              tip_length=c(0,0), 
+              y_position = c(7,7,8), 
+              size = 0.5, 
+              textsize = 4, 
+              extend_line = -0.1, 
+              color = "black",
+              test = "t.test") 
+
+p1
+#??geom_signif
+DimPlot(sc,split.by = 'Group')
+FeaturePlot(s,features = "VAMP2")
+############################
+data$Group2 <- factor(data$Group2,levels = c("HC","AD"))
+
+x_value <- c(0.9, 1.1)
+for (i in 1:2) {
+  x_value <- append(x_value, x_value[((i-1)*1+1):(i*1)]+1)
+}
+
+med_values <- rep(c(median(data[which(data$Group == "HC"),]$Values),
+                    #median(data[which(data$Group == "MCI"),]$Values),
+                    median(data[which(data$Group == "AD"),]$Values)),
+                  rep(2,2))
+
+tmp_data <- as.data.frame(cbind(x_value,med_values,
+                                rep(c("HC","AD"),
+                                    rep(2,2))))
+tmp_data$x_value <- as.numeric(tmp_data$x_value)
+tmp_data$med_values <- as.numeric(tmp_data$med_values)
+tmp_data$V3 <- factor(tmp_data$V3, levels = c("HC","AD"))
+
+table(data$Group2)
+
+p2 <- ggplot(data,aes(Group2,Values))+
+
+  geom_violin(aes(fill=Group2),color="white")+
+
+  geom_boxplot(fill="#a6a7ac",color="#a6a7ac",
+               width = 0.15,outlier.shape = NA)+
+  geom_line(data=tmp_data,aes(x_value,med_values,group=V3,color=V3),size=1.5)+
+
+  scale_color_manual(values = c("#fbd3b9","#a1c9e5"))+
+  scale_fill_manual(values = c("#fbd3b9","#a1c9e5"))+
+ 
+  theme_bw()+
+  theme(panel.grid = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none")+
+ 
+  xlab("Status")+
+  ylab("Gene expression")+
+
+  scale_y_continuous(breaks = seq(0,8,2))+
+
+  annotate("text", label = "VAMP2", parse = TRUE, 
+           x = 1.5, y = 8, size = 4, colour = "black")+
+  # annotate("text", label = "17284",
+  #          x = 1.3, y = 7, size = 4, colour = "black")+
+  # annotate("text", label = "3362",  
+  #          x = 2.3, y = 8, size = 4, colour = "black")+
+  # annotate("text", label = "2096",
+  #          x = 3.3, y = 7, size = 4, colour = "black")+
+
+  geom_signif(comparisons = list(c("HC", "AD")),
+              map_signif_level=T, 
+              tip_length=c(0,0), 
+              y_position = c(7,7,8), 
+              size = 0.5, 
+              textsize = 4, 
+              extend_line = -0.1, 
+              color = "black",
+              test = "t.test")
+
+p2
 
 
 
