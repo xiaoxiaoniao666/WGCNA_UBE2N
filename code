@@ -615,7 +615,7 @@ Idents(s) <- "celltype"
 #sc <- subset(s,downsample=100)
 table(s$Diagnosis2)
 sc <- s
-markers <- c("VAMP2")
+markers <- c("UBE2N")
 Idents(sc) <- "celltype"
 levels(sc)
 table(sc$Diagnosis2)
